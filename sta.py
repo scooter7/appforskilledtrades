@@ -3,21 +3,14 @@ import requests
 import json
 import pandas as pd
 
-# Agno imports for Jina + OpenAI
 from agno.agent import Agent
 from agno.tools.jina import JinaReaderTools
 from agno.models.openai import OpenAIChat
 
-###############################################################################
-# Retrieve Secrets (for Streamlit Cloud)
-###############################################################################
 JINA_API_KEY = st.secrets["jina_api_key"]
 OPENAI_API_KEY = st.secrets["openai_api_key"]
 COLLEGE_SCORECARD_API_KEY = st.secrets["college_scorecard_api_key"]
 
-###############################################################################
-# State Abbreviation Map (Full Name -> Two-Letter Code)
-###############################################################################
 state_abbrev_map = {
     "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
     "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
@@ -34,9 +27,6 @@ state_abbrev_map = {
     "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY"
 }
 
-###############################################################################
-# Configuration: Trades, States, etc.
-###############################################################################
 TRADES = [
     "Manufacturing",
     "Automotive",
@@ -48,9 +38,6 @@ TRADES = [
 
 STATES = list(state_abbrev_map.keys())
 
-###############################################################################
-# BLS Data Retrieval (Multi-step fallback with Jina)
-###############################################################################
 def fetch_bls_data(agent: Agent, trade: str, state: str) -> str:
     """
     1) Attempt to find BLS or workforce data specifically for (trade) in (state).
@@ -58,8 +45,6 @@ def fetch_bls_data(agent: Agent, trade: str, state: str) -> str:
        plus state workforce development info.
     3) Return the summarized text.
     """
-
-    # STEP 1: Search for state-level data
     state_search_prompt = (
         f"Search for: BLS data or workforce outlook for '{trade}' in '{state}'. "
         "If no relevant info is found, respond with EXACTLY 'NO_DATA_FOUND'. Summarize clearly."
@@ -67,9 +52,7 @@ def fetch_bls_data(agent: Agent, trade: str, state: str) -> str:
     response1 = agent.run(state_search_prompt)
     content1 = response1.content.strip()
 
-    # Check if agent gave us a "NO_DATA_FOUND" fallback trigger
     if "NO_DATA_FOUND" in content1:
-        # STEP 2: Fallback to national data + any state workforce dev info
         fallback_prompt = (
             f"Search for: national BLS data or outlook for '{trade}', plus any workforce dev info for '{state}'. "
             "Summarize clearly."
@@ -79,9 +62,6 @@ def fetch_bls_data(agent: Agent, trade: str, state: str) -> str:
     else:
         return content1
 
-###############################################################################
-# College Scorecard CIP-based Lookups
-###############################################################################
 def fetch_cip_colleges(trade: str, state: str) -> list:
     """
     Uses College Scorecard to find up to 100 colleges in the given state
@@ -91,12 +71,10 @@ def fetch_cip_colleges(trade: str, state: str) -> list:
       - tuition_in_state
       - cip_titles (list of matching CIP program titles)
     """
-    # Convert full state name to abbreviation
     abbrev = state_abbrev_map.get(state)
     if not abbrev:
         return []
 
-    # CIP-based search for the trade keyword
     trade_keyword = trade.lower()
     url = "https://api.data.gov/ed/collegescorecard/v1/schools"
     params = {
@@ -125,9 +103,6 @@ def fetch_cip_colleges(trade: str, state: str) -> list:
         })
     return colleges
 
-###############################################################################
-# Use Jina to refine program details for each college
-###############################################################################
 def refine_college_details(agent: Agent, college_name: str, trade: str) -> dict:
     """
     Asks JinaReaderTools to search for program details about (college_name) + (trade),
@@ -147,7 +122,6 @@ def refine_college_details(agent: Agent, college_name: str, trade: str) -> dict:
     resp = agent.run(prompt)
     content = resp.content.strip()
 
-    # Attempt to parse as JSON
     try:
         details = json.loads(content)
         return {
@@ -164,9 +138,6 @@ def refine_college_details(agent: Agent, college_name: str, trade: str) -> dict:
             "mentions_ai": "N/A"
         }
 
-###############################################################################
-# Build a DataFrame of all colleges + refined details
-###############################################################################
 def build_college_dataframe(agent: Agent, trade: str, state: str) -> pd.DataFrame:
     """
     1) Fetch CIP-based colleges from College Scorecard.
@@ -177,7 +148,7 @@ def build_college_dataframe(agent: Agent, trade: str, state: str) -> pd.DataFram
     """
     raw_colleges = fetch_cip_colleges(trade, state)
     if not raw_colleges:
-        return pd.DataFrame()  # empty
+        return pd.DataFrame()
 
     table_rows = []
     for c in raw_colleges:
@@ -195,9 +166,6 @@ def build_college_dataframe(agent: Agent, trade: str, state: str) -> pd.DataFram
 
     return pd.DataFrame(table_rows)
 
-###############################################################################
-# Job Listings from Jina
-###############################################################################
 def fetch_job_listings(agent: Agent, trade: str, state: str) -> str:
     """
     Uses JinaReaderTools to search for Indeed job listings for the trade & state,
@@ -210,9 +178,6 @@ def fetch_job_listings(agent: Agent, trade: str, state: str) -> str:
     response = agent.run(prompt)
     return response.content
 
-###############################################################################
-# Streamlit App
-###############################################################################
 def main():
     st.title("Industry & Career Insights (Jina + College Scorecard)")
     st.markdown(
@@ -227,18 +192,15 @@ def main():
         """
     )
 
-    # Let the user pick a trade & state
     selected_trade = st.selectbox("Select a Trade", TRADES)
     selected_state = st.selectbox("Select a State", STATES)
 
     if st.button("Fetch Data"):
-        # BLS Data with fallback
         with st.spinner("Retrieving BLS Data..."):
             bls_content = fetch_bls_data(agent, selected_trade, selected_state)
             st.subheader("BLS Projections")
             st.write(bls_content)
 
-        # College Scorecard + Jina for details
         with st.spinner("Retrieving Colleges..."):
             df_colleges = build_college_dataframe(agent, selected_trade, selected_state)
             st.subheader("Colleges & Universities")
@@ -247,15 +209,11 @@ def main():
             else:
                 st.dataframe(df_colleges)
 
-        # Indeed Jobs (via Jina)
         with st.spinner("Retrieving Job Listings..."):
             job_content = fetch_job_listings(agent, selected_trade, selected_state)
             st.subheader("Job Listings (Indeed)")
             st.write(job_content)
 
-###############################################################################
-# Create the Agent with JinaReaderTools
-###############################################################################
 agent = Agent(
     tools=[JinaReaderTools(api_key=JINA_API_KEY)],
     model=OpenAIChat(api_key=OPENAI_API_KEY)
